@@ -164,13 +164,16 @@ export default function Reports() {
     }
   }
 
-  const generatePDF = async () => {
+ const generatePDF = async () => {
     setGenerating(true)
     try {
       toast('⏳ Buscando dados para o PDF...', { icon: '⏳' })
+      const generateAll = tab === 'dre'
 
       // Busca dados FRESCOS diretamente do banco
       const { fuel, maint, fines, mileage } = await fetchData(period, year, month, vehicleFilter)
+
+console.log('Dados PDF:', { fuel: fuel.length, maint: maint.length, fines: fines.length, mileage: mileage.length })
 
       // Carrega lista de veículos atualizada
       const { data: vList } = await supabase.from('vehicles').select('id, plate, brand, model').eq('is_active', true).order('plate')
@@ -252,7 +255,7 @@ export default function Reports() {
       y = doc.lastAutoTable.finalY + 8
 
       // ── CUSTO POR VEÍCULO ──
-      if (pdfVehicles.length > 0) {
+      if (pdfVehicles.length > 0 && (generateAll || tab === 'vehicles')) {
         if (y > M_BOTTOM) { doc.addPage(); addPageBackground(doc, timbrado, pageW, pageH); y = M_TOP }
         doc.setFillColor(240,244,250)
         doc.rect(M_LEFT, y, usableW, 6, 'F')
@@ -282,7 +285,7 @@ export default function Reports() {
       }
 
       // ── ABASTECIMENTOS ──
-      if (fuel.length > 0) {
+      if (fuel.length > 0 && (generateAll || tab === 'fuel')) {
         if (y > M_BOTTOM) { doc.addPage(); addPageBackground(doc, timbrado, pageW, pageH); y = M_TOP }
         doc.setFillColor(240,244,250)
         doc.rect(M_LEFT, y, usableW, 6, 'F')
@@ -316,7 +319,7 @@ export default function Reports() {
       }
 
       // ── MANUTENÇÕES ──
-      if (maint.length > 0) {
+      if (maint.length > 0 && (generateAll || tab === 'maint')) {
         if (y > M_BOTTOM) { doc.addPage(); addPageBackground(doc, timbrado, pageW, pageH); y = M_TOP }
         doc.setFillColor(240,244,250)
         doc.rect(M_LEFT, y, usableW, 6, 'F')
@@ -350,7 +353,7 @@ export default function Reports() {
       }
 
       // ── MULTAS ──
-      if (fines.length > 0) {
+      if (fines.length > 0 && (generateAll || tab === 'fines')) {
         if (y > M_BOTTOM) { doc.addPage(); addPageBackground(doc, timbrado, pageW, pageH); y = M_TOP }
         doc.setFillColor(240,244,250)
         doc.rect(M_LEFT, y, usableW, 6, 'F')
