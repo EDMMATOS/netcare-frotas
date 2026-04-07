@@ -10,28 +10,26 @@ const fmt  = v => `R$ ${Number(v||0).toLocaleString('pt-BR',{minimumFractionDigi
 const fmtN = v => Number(v||0).toLocaleString('pt-BR')
 const MONTHS = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
 
-// Margens do timbrado NetCare
-const M_LEFT   = 15   // margem esquerda
-const M_RIGHT  = 200  // largura útil (círculos são decorativos, pode sobrepor)
-const M_TOP    = 38   // topo (abaixo do logo)
-const M_BOTTOM = 252  // limite antes do rodapé
+const M_LEFT   = 15
+const M_RIGHT  = 200
+const M_TOP    = 38
+const M_BOTTOM = 252
 
 export default function Reports() {
-  const [loading, setLoading]     = useState(true)
-  const [tab, setTab]             = useState('dre')
-  const [year, setYear]           = useState(new Date().getFullYear())
-  const [month, setMonth]         = useState(new Date().getMonth())
-  const [period, setPeriod]       = useState('month')
+  const [loading, setLoading]         = useState(true)
+  const [tab, setTab]                 = useState('dre')
+  const [year, setYear]               = useState(new Date().getFullYear())
+  const [month, setMonth]             = useState(new Date().getMonth())
+  const [period, setPeriod]           = useState('month')
   const [vehicleFilter, setVehicleFilter] = useState('')
-  const [vehicles, setVehicles]   = useState([])
-  const [dreData, setDreData]     = useState(null)
+  const [vehicles, setVehicles]       = useState([])
+  const [dreData, setDreData]         = useState(null)
   const [vehicleReport, setVehicleReport] = useState([])
-  const [fuelReport, setFuelReport]     = useState([])
-  const [maintReport, setMaintReport]   = useState([])
-  const [finesReport, setFinesReport]   = useState([])
-  const [mileageReport, setMileageReport] = useState([])
+  const [fuelReport, setFuelReport]   = useState([])
+  const [maintReport, setMaintReport] = useState([])
+  const [finesReport, setFinesReport] = useState([])
   const [monthlyChart, setMonthlyChart] = useState([])
-  const [generating, setGenerating]     = useState(false)
+  const [generating, setGenerating]   = useState(false)
 
   useEffect(() => { loadVehicles() }, [])
   useEffect(() => { loadReports() }, [year, month, period, vehicleFilter])
@@ -41,33 +39,36 @@ export default function Reports() {
     setVehicles(data || [])
   }
 
-  const getDateRange = () => {
-    if (period === 'month') {
+  const getDateRange = (p, y, m) => {
+    const usePeriod = p || period
+    const useYear   = y || year
+    const useMonth  = m !== undefined ? m : month
+    if (usePeriod === 'month') {
       return {
-        start: new Date(year, month, 1).toISOString().split('T')[0],
-        end:   new Date(year, month+1, 0).toISOString().split('T')[0],
+        start: new Date(useYear, useMonth, 1).toISOString().split('T')[0],
+        end:   new Date(useYear, useMonth+1, 0).toISOString().split('T')[0],
       }
     }
     return {
-      start: new Date(year, 0, 1).toISOString().split('T')[0],
-      end:   new Date(year, 11, 31).toISOString().split('T')[0],
+      start: new Date(useYear, 0, 1).toISOString().split('T')[0],
+      end:   new Date(useYear, 11, 31).toISOString().split('T')[0],
     }
   }
 
-  const loadReports = async () => {
-    setLoading(true)
-    const { start, end } = getDateRange()
+  const fetchData = async (periodParam, yearParam, monthParam, vehicleFilterParam) => {
+    const { start, end } = getDateRange(periodParam, yearParam, monthParam)
+    const vf = vehicleFilterParam !== undefined ? vehicleFilterParam : vehicleFilter
 
     let fuelQ    = supabase.from('fuel_records').select('*, vehicles(plate,brand,model), suppliers(name), drivers(name)').gte('date', start).lte('date', end)
     let maintQ   = supabase.from('maintenance_records').select('*, vehicles(plate,brand,model), suppliers(name)').gte('date', start).lte('date', end)
     let finesQ   = supabase.from('fines').select('*, vehicles(plate,brand,model), drivers(name)').gte('date', start).lte('date', end)
     let mileageQ = supabase.from('mileage_records').select('*, vehicles(plate,brand,model), drivers(name)').gte('date', start).lte('date', end)
 
-    if (vehicleFilter) {
-      fuelQ    = fuelQ.eq('vehicle_id', vehicleFilter)
-      maintQ   = maintQ.eq('vehicle_id', vehicleFilter)
-      finesQ   = finesQ.eq('vehicle_id', vehicleFilter)
-      mileageQ = mileageQ.eq('vehicle_id', vehicleFilter)
+    if (vf) {
+      fuelQ    = fuelQ.eq('vehicle_id', vf)
+      maintQ   = maintQ.eq('vehicle_id', vf)
+      finesQ   = finesQ.eq('vehicle_id', vf)
+      mileageQ = mileageQ.eq('vehicle_id', vf)
     }
 
     const [{ data: fuel }, { data: maint }, { data: fines }, { data: mileage }] = await Promise.all([
@@ -77,54 +78,62 @@ export default function Reports() {
       mileageQ.order('date', { ascending: false }),
     ])
 
-    setFuelReport(fuel || [])
-    setMaintReport(maint || [])
-    setFinesReport(fines || [])
-    setMileageReport(mileage || [])
+    return { fuel: fuel||[], maint: maint||[], fines: fines||[], mileage: mileage||[] }
+  }
 
-    const totalFuel      = fuel?.reduce((s, f) => s + Number(f.total_cost||0), 0) || 0
-    const totalMaint     = maint?.reduce((s, m) => s + Number(m.total_cost||0), 0) || 0
-    const totalFinesPd   = fines?.filter(f => f.status === 'pending').reduce((s, f) => s + Number(f.actual_value||0), 0) || 0
-    const totalFinesPaid = fines?.filter(f => f.status === 'paid').reduce((s, f) => s + Number(f.actual_value||0), 0) || 0
-    const totalKm        = mileage?.reduce((s, m) => s + Number(m.total_km||0), 0) || 0
+  const calcDre = (fuel, maint, fines, mileage) => {
+    const totalFuel      = fuel.reduce((s, f) => s + Number(f.total_cost||0), 0)
+    const totalMaint     = maint.reduce((s, m) => s + Number(m.total_cost||0), 0)
+    const totalFinesPd   = fines.filter(f => f.status === 'pending').reduce((s, f) => s + Number(f.actual_value||0), 0)
+    const totalFinesPaid = fines.filter(f => f.status === 'paid').reduce((s, f) => s + Number(f.actual_value||0), 0)
+    const totalKm        = mileage.reduce((s, m) => s + Number(m.total_km||0), 0)
     const totalCost      = totalFuel + totalMaint + totalFinesPaid
-
-    setDreData({
-      totalFuel, totalMaint,
-      totalFinesPending: totalFinesPd,
+    return {
+      totalFuel, totalMaint, totalFinesPending: totalFinesPd,
       totalFinesPaid, totalKm, totalCost,
       fuelPct:   totalCost > 0 ? ((totalFuel/totalCost)*100).toFixed(1) : 0,
       maintPct:  totalCost > 0 ? ((totalMaint/totalCost)*100).toFixed(1) : 0,
       costPerKm: totalKm > 0 ? (totalCost/totalKm).toFixed(4) : 0,
-    })
+    }
+  }
 
+  const calcVehicleReport = (fuel, maint, fines, mileage, vehiclesList) => {
     const byVehicle = {}
-    vehicles.forEach(v => {
+    vehiclesList.forEach(v => {
       byVehicle[v.id] = { id:v.id, plate:v.plate, brand:v.brand, model:v.model, fuel:0, maint:0, fines:0, km:0 }
     })
-    fuel?.forEach(f => { if (byVehicle[f.vehicle_id]) byVehicle[f.vehicle_id].fuel += Number(f.total_cost||0) })
-    maint?.forEach(m => { if (byVehicle[m.vehicle_id]) byVehicle[m.vehicle_id].maint += Number(m.total_cost||0) })
-    fines?.filter(f => f.status === 'paid').forEach(f => { if (byVehicle[f.vehicle_id]) byVehicle[f.vehicle_id].fines += Number(f.actual_value||0) })
-    mileage?.forEach(m => { if (byVehicle[m.vehicle_id]) byVehicle[m.vehicle_id].km += Number(m.total_km||0) })
-    setVehicleReport(
-      Object.values(byVehicle)
-        .map(v => ({ ...v, total: v.fuel+v.maint+v.fines, costPerKm: v.km > 0 ? (v.fuel+v.maint)/v.km : 0 }))
-        .filter(v => v.total > 0)
-        .sort((a, b) => b.total - a.total)
-    )
+    fuel.forEach(f => { if (byVehicle[f.vehicle_id]) byVehicle[f.vehicle_id].fuel += Number(f.total_cost||0) })
+    maint.forEach(m => { if (byVehicle[m.vehicle_id]) byVehicle[m.vehicle_id].maint += Number(m.total_cost||0) })
+    fines.filter(f => f.status === 'paid').forEach(f => { if (byVehicle[f.vehicle_id]) byVehicle[f.vehicle_id].fines += Number(f.actual_value||0) })
+    mileage.forEach(m => { if (byVehicle[m.vehicle_id]) byVehicle[m.vehicle_id].km += Number(m.total_km||0) })
+    return Object.values(byVehicle)
+      .map(v => ({ ...v, total: v.fuel+v.maint+v.fines, costPerKm: v.km > 0 ? (v.fuel+v.maint)/v.km : 0 }))
+      .filter(v => v.total > 0)
+      .sort((a, b) => b.total - a.total)
+  }
+
+  const loadReports = async () => {
+    setLoading(true)
+    const { fuel, maint, fines, mileage } = await fetchData(period, year, month, vehicleFilter)
+    setFuelReport(fuel)
+    setMaintReport(maint)
+    setFinesReport(fines)
+    setDreData(calcDre(fuel, maint, fines, mileage))
+
+    const vList = vehicles.length > 0 ? vehicles : (await supabase.from('vehicles').select('id, plate, brand, model').eq('is_active', true).order('plate')).data || []
+    setVehicleReport(calcVehicleReport(fuel, maint, fines, mileage, vList))
 
     const monthly = MONTHS.map((mes, i) => {
       const ms = new Date(year, i, 1).toISOString().split('T')[0]
       const me = new Date(year, i+1, 0).toISOString().split('T')[0]
-      const f  = fuel?.filter(r => r.date >= ms && r.date <= me).reduce((s,r) => s+Number(r.total_cost||0), 0) || 0
-      const m2 = maint?.filter(r => r.date >= ms && r.date <= me).reduce((s,r) => s+Number(r.total_cost||0), 0) || 0
+      const f  = fuel.filter(r => r.date >= ms && r.date <= me).reduce((s,r) => s+Number(r.total_cost||0), 0)
+      const m2 = maint.filter(r => r.date >= ms && r.date <= me).reduce((s,r) => s+Number(r.total_cost||0), 0)
       return { mes, Combustível: f, Manutenção: m2, Total: f+m2 }
     })
     setMonthlyChart(monthly)
     setLoading(false)
   }
 
-  // Carrega imagem do timbrado
   const loadTimbrado = async () => {
     try {
       const { data } = supabase.storage.from('company-assets').getPublicUrl('timbrado.jpg')
@@ -139,12 +148,10 @@ export default function Reports() {
     } catch(e) { return null }
   }
 
-  // Adiciona timbrado como fundo + cabeçalho do documento
   const addPageBackground = (doc, timbrado, pageW, pageH) => {
     if (timbrado) {
       doc.addImage(timbrado, 'JPEG', 0, 0, pageW, pageH)
     } else {
-      // Fallback sem timbrado
       doc.setFillColor(26,58,92)
       doc.rect(0, 0, pageW, 25, 'F')
       doc.setTextColor(255,255,255)
@@ -158,25 +165,34 @@ export default function Reports() {
   }
 
   const generatePDF = async () => {
-    if (!dreData) return toast.error('Aguarde os dados carregarem')
     setGenerating(true)
     try {
-      const doc      = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' })
-      const pageW    = 210
-      const pageH    = 297
-      const usableW  = M_RIGHT - M_LEFT  // largura útil ~140mm
-      let   y        = M_TOP
+      toast('⏳ Buscando dados para o PDF...', { icon: '⏳' })
+
+      // Busca dados FRESCOS diretamente do banco
+      const { fuel, maint, fines, mileage } = await fetchData(period, year, month, vehicleFilter)
+
+      // Carrega lista de veículos atualizada
+      const { data: vList } = await supabase.from('vehicles').select('id, plate, brand, model').eq('is_active', true).order('plate')
+
+      // Calcula DRE e relatório por veículo com dados frescos
+      const pdfDre      = calcDre(fuel, maint, fines, mileage)
+      const pdfVehicles = calcVehicleReport(fuel, maint, fines, mileage, vList || [])
+
+      const doc    = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' })
+      const pageW  = 210
+      const pageH  = 297
+      const usableW = M_RIGHT - M_LEFT
+      let y        = M_TOP
 
       const periodLabel  = period === 'month' ? `${MONTHS[month]}/${year}` : `Ano ${year}`
-      const vehicleLabel = vehicleFilter ? vehicles.find(v => v.id === vehicleFilter)?.plate || '' : 'Toda a Frota'
+      const vehicleLabel = vehicleFilter ? (vList||[]).find(v => v.id === vehicleFilter)?.plate || '' : 'Toda a Frota'
 
-      // Carrega timbrado
+      // Timbrado
       const timbrado = await loadTimbrado()
-
-      // Página 1 — fundo
       addPageBackground(doc, timbrado, pageW, pageH)
 
-      // Título do relatório
+      // Título
       doc.setFillColor(26,58,92)
       doc.rect(M_LEFT, y, usableW, 11, 'F')
       doc.setTextColor(255,255,255)
@@ -185,14 +201,12 @@ export default function Reports() {
       doc.text('RELATÓRIO DE GESTÃO DE FROTAS', M_LEFT + usableW/2, y+7.5, { align:'center' })
       y += 14
 
-      // Linha de período
       doc.setTextColor(80,80,80)
       doc.setFontSize(8)
       doc.setFont('helvetica','normal')
       doc.text(`Período: ${periodLabel}   |   Frota: ${vehicleLabel}   |   Emitido em: ${new Date().toLocaleDateString('pt-BR')}`, M_LEFT, y)
       y += 8
 
-      // Linha separadora
       doc.setDrawColor(200,200,200)
       doc.line(M_LEFT, y, M_RIGHT, y)
       y += 6
@@ -207,43 +221,39 @@ export default function Reports() {
       y += 8
 
       autoTable(doc, {
-  startY: y,
-  head: [['Categoria', 'Valor (R$)', '% do Total']],
-  body: [
-    ['Combustível',      fmt(dreData.totalFuel),          `${dreData.fuelPct}%`],
-    ['Manutenções',      fmt(dreData.totalMaint),         `${dreData.maintPct}%`],
-    ['Multas Pagas',     fmt(dreData.totalFinesPaid),     '—'],
-    ['CUSTO TOTAL',      fmt(dreData.totalCost),          '100%'],
-    ['KM Rodados',       `${fmtN(dreData.totalKm)} km`,  '—'],
-    ['Custo por KM',     `R$ ${dreData.costPerKm}`,       '—'],
-    ['Multas Pendentes', fmt(dreData.totalFinesPending),  '—'],
-  ],
-  margin: { left: M_LEFT, right: pageW - M_RIGHT },
-  tableWidth: M_RIGHT - M_LEFT,
-  styles: { fontSize:8, cellPadding:2.5, textColor:[50,50,50] },
-  headStyles: { fillColor:[26,58,92], textColor:255, fontStyle:'bold', fontSize:8 },
-  columnStyles: {
-    0: { cellWidth: 'auto' },
-    1: { halign:'right', cellWidth: 50 },
-    2: { halign:'right', cellWidth: 35 },
-  },
-  didParseCell: data => {
-    if (data.row.index === 3) {
-      data.cell.styles.fontStyle = 'bold'
-      data.cell.styles.fillColor = [220,230,245]
-      data.cell.styles.textColor = [26,58,92]
-    }
-  }
-})
+        startY: y,
+        head: [['Categoria', 'Valor (R$)', '% do Total']],
+        body: [
+          ['Combustível',      fmt(pdfDre.totalFuel),          `${pdfDre.fuelPct}%`],
+          ['Manutenções',      fmt(pdfDre.totalMaint),         `${pdfDre.maintPct}%`],
+          ['Multas Pagas',     fmt(pdfDre.totalFinesPaid),     '—'],
+          ['CUSTO TOTAL',      fmt(pdfDre.totalCost),          '100%'],
+          ['KM Rodados',       `${fmtN(pdfDre.totalKm)} km`,  '—'],
+          ['Custo por KM',     `R$ ${pdfDre.costPerKm}`,       '—'],
+          ['Multas Pendentes', fmt(pdfDre.totalFinesPending),  '—'],
+        ],
+        margin: { left: M_LEFT, right: pageW - M_RIGHT },
+        tableWidth: M_RIGHT - M_LEFT,
+        styles: { fontSize:8, cellPadding:2.5, textColor:[50,50,50] },
+        headStyles: { fillColor:[26,58,92], textColor:255, fontStyle:'bold', fontSize:8 },
+        columnStyles: {
+          0: { cellWidth: 'auto' },
+          1: { halign:'right', cellWidth: 50 },
+          2: { halign:'right', cellWidth: 35 },
+        },
+        didParseCell: data => {
+          if (data.row.index === 3) {
+            data.cell.styles.fontStyle = 'bold'
+            data.cell.styles.fillColor = [220,230,245]
+            data.cell.styles.textColor = [26,58,92]
+          }
+        }
+      })
       y = doc.lastAutoTable.finalY + 8
 
       // ── CUSTO POR VEÍCULO ──
-      if (vehicleReport.length > 0) {
-        if (y > M_BOTTOM) {
-          doc.addPage()
-          addPageBackground(doc, timbrado, pageW, pageH)
-          y = M_TOP
-        }
+      if (pdfVehicles.length > 0) {
+        if (y > M_BOTTOM) { doc.addPage(); addPageBackground(doc, timbrado, pageW, pageH); y = M_TOP }
         doc.setFillColor(240,244,250)
         doc.rect(M_LEFT, y, usableW, 6, 'F')
         doc.setTextColor(26,58,92)
@@ -251,11 +261,10 @@ export default function Reports() {
         doc.setFont('helvetica','bold')
         doc.text('▸  CUSTO POR VEÍCULO', M_LEFT+2, y+4.2)
         y += 8
-
         autoTable(doc, {
           startY: y,
           head: [['Veículo','Combustível','Manutenção','Multas','KM','R$/KM','Total']],
-          body: vehicleReport.map(v => [
+          body: pdfVehicles.map(v => [
             `${v.plate} — ${v.brand} ${v.model}`,
             fmt(v.fuel), fmt(v.maint), fmt(v.fines),
             `${fmtN(v.km)} km`,
@@ -267,20 +276,14 @@ export default function Reports() {
           styles: { fontSize:7, cellPadding:2 },
           headStyles: { fillColor:[26,58,92], textColor:255, fontStyle:'bold', fontSize:7 },
           columnStyles: { 6: { halign:'right', fontStyle:'bold' } },
-          didDrawPage: (data) => {
-            if (data.pageNumber > 1) addPageBackground(doc, timbrado, pageW, pageH)
-          }
+          didDrawPage: () => addPageBackground(doc, timbrado, pageW, pageH)
         })
         y = doc.lastAutoTable.finalY + 8
       }
 
       // ── ABASTECIMENTOS ──
-      if (fuelReport.length > 0) {
-        if (y > M_BOTTOM) {
-          doc.addPage()
-          addPageBackground(doc, timbrado, pageW, pageH)
-          y = M_TOP
-        }
+      if (fuel.length > 0) {
+        if (y > M_BOTTOM) { doc.addPage(); addPageBackground(doc, timbrado, pageW, pageH); y = M_TOP }
         doc.setFillColor(240,244,250)
         doc.rect(M_LEFT, y, usableW, 6, 'F')
         doc.setTextColor(26,58,92)
@@ -288,11 +291,10 @@ export default function Reports() {
         doc.setFont('helvetica','bold')
         doc.text('▸  ABASTECIMENTOS', M_LEFT+2, y+4.2)
         y += 8
-
         autoTable(doc, {
           startY: y,
           head: [['Data','Veículo','Combustível','Litros','R$/L','KM/L','Total']],
-          body: fuelReport.map(f => [
+          body: fuel.map(f => [
             new Date(f.date+'T12:00:00').toLocaleDateString('pt-BR'),
             f.vehicles?.plate || '—',
             f.fuel_type || '—',
@@ -301,10 +303,7 @@ export default function Reports() {
             f.km_per_liter ? Number(f.km_per_liter).toFixed(1) : '—',
             fmt(f.total_cost)
           ]),
-          foot: [[
-            '', '', '', `${fuelReport.reduce((s,f) => s+Number(f.liters||0), 0).toFixed(2)} L`,
-            '', '', fmt(dreData?.totalFuel)
-          ]],
+          foot: [['', '', '', `${fuel.reduce((s,f) => s+Number(f.liters||0), 0).toFixed(2)} L`, '', '', fmt(pdfDre.totalFuel)]],
           margin: { left: M_LEFT, right: pageW - M_RIGHT },
           tableWidth: usableW,
           styles: { fontSize:7, cellPadding:2 },
@@ -317,12 +316,8 @@ export default function Reports() {
       }
 
       // ── MANUTENÇÕES ──
-      if (maintReport.length > 0) {
-        if (y > M_BOTTOM) {
-          doc.addPage()
-          addPageBackground(doc, timbrado, pageW, pageH)
-          y = M_TOP
-        }
+      if (maint.length > 0) {
+        if (y > M_BOTTOM) { doc.addPage(); addPageBackground(doc, timbrado, pageW, pageH); y = M_TOP }
         doc.setFillColor(240,244,250)
         doc.rect(M_LEFT, y, usableW, 6, 'F')
         doc.setTextColor(26,58,92)
@@ -330,11 +325,10 @@ export default function Reports() {
         doc.setFont('helvetica','bold')
         doc.text('▸  MANUTENÇÕES', M_LEFT+2, y+4.2)
         y += 8
-
         autoTable(doc, {
           startY: y,
           head: [['Data','Veículo','Tipo','Fornecedor','Peças','MO','Total']],
-          body: maintReport.map(m => [
+          body: maint.map(m => [
             new Date(m.date+'T12:00:00').toLocaleDateString('pt-BR'),
             m.vehicles?.plate || '—',
             m.type || '—',
@@ -343,7 +337,7 @@ export default function Reports() {
             fmt(m.labor_cost),
             fmt(m.total_cost)
           ]),
-          foot: [['', '', '', '', '', 'Total', fmt(dreData?.totalMaint)]],
+          foot: [['', '', '', '', '', 'Total', fmt(pdfDre.totalMaint)]],
           margin: { left: M_LEFT, right: pageW - M_RIGHT },
           tableWidth: usableW,
           styles: { fontSize:7, cellPadding:2 },
@@ -356,12 +350,8 @@ export default function Reports() {
       }
 
       // ── MULTAS ──
-      if (finesReport.length > 0) {
-        if (y > M_BOTTOM) {
-          doc.addPage()
-          addPageBackground(doc, timbrado, pageW, pageH)
-          y = M_TOP
-        }
+      if (fines.length > 0) {
+        if (y > M_BOTTOM) { doc.addPage(); addPageBackground(doc, timbrado, pageW, pageH); y = M_TOP }
         doc.setFillColor(240,244,250)
         doc.rect(M_LEFT, y, usableW, 6, 'F')
         doc.setTextColor(26,58,92)
@@ -369,11 +359,10 @@ export default function Reports() {
         doc.setFont('helvetica','bold')
         doc.text('▸  MULTAS', M_LEFT+2, y+4.2)
         y += 8
-
         autoTable(doc, {
           startY: y,
           head: [['Data','Veículo','Condutor','Descrição','Pts','Status','Valor']],
-          body: finesReport.map(f => [
+          body: fines.map(f => [
             new Date(f.date+'T12:00:00').toLocaleDateString('pt-BR'),
             f.vehicles?.plate || '—',
             f.drivers?.name || '—',
@@ -391,7 +380,7 @@ export default function Reports() {
         })
       }
 
-      // ── NUMERAÇÃO DE PÁGINAS (por cima do timbrado) ──
+      // ── NUMERAÇÃO ──
       const pageCount = doc.internal.getNumberOfPages()
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i)
@@ -479,7 +468,6 @@ export default function Reports() {
         </div>
       ) : (
         <>
-          {/* DRE */}
           {tab === 'dre' && dreData && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -540,7 +528,6 @@ export default function Reports() {
             </div>
           )}
 
-          {/* Por Veículo */}
           {tab === 'vehicles' && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               <table className="w-full text-sm">
@@ -577,7 +564,6 @@ export default function Reports() {
             </div>
           )}
 
-          {/* Combustível */}
           {tab === 'fuel' && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               <table className="w-full text-sm">
@@ -627,7 +613,6 @@ export default function Reports() {
             </div>
           )}
 
-          {/* Manutenção */}
           {tab === 'maint' && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               <table className="w-full text-sm">
@@ -667,7 +652,6 @@ export default function Reports() {
             </div>
           )}
 
-          {/* Multas */}
           {tab === 'fines' && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               <table className="w-full text-sm">
@@ -707,7 +691,6 @@ export default function Reports() {
             </div>
           )}
 
-          {/* Gráficos */}
           {tab === 'chart' && (
             <div className="space-y-4">
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
